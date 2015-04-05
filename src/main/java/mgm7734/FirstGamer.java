@@ -1,8 +1,6 @@
 package mgm7734;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
 
 import org.ggp.base.player.gamer.statemachine.sample.SampleGamer;
 import org.ggp.base.util.statemachine.MachineState;
@@ -16,49 +14,49 @@ public class FirstGamer extends SampleGamer {
 
 	private StateMachine sm;
 
-	class MoveScore {
-		public Move move;
-		public int score;
-	}
-
 	@Override
 	public Move stateMachineSelectMove(long timeout)
 			throws TransitionDefinitionException, MoveDefinitionException,
 			GoalDefinitionException {
+		Move bestMove[] = {null};
 		sm = getStateMachine();
-		MoveScore best = findBestMove(getCurrentState(), 0, 100);
-		return best.move;
+		int score = findBestMove(getCurrentState(), 0, 100, bestMove);
+//		System.out.printf("%s %d\n", bestMove[0], score);
+		return bestMove[0];
 	}
 
-	private MoveScore findBestMove(MachineState state, int alpha, int beta)
+	private int findBestMove(MachineState state, int alpha, int beta, Move[] bestMove)
 			throws MoveDefinitionException, TransitionDefinitionException, GoalDefinitionException {
-		MoveScore result = new MoveScore();
-		Map<Move, List<MachineState>> nextStates = sm.getNextStates(state, getRole());
-		for (Entry<Move, List<MachineState>> entry : nextStates.entrySet()) {
-			List<MachineState> statesForMove = entry.getValue();
-			int score = findMinScore(statesForMove, alpha, beta);
+		if (sm.isTerminal(state)) {
+			return sm.getGoal(state, getRole());
+		}
+		for (Move move : sm.getLegalMoves(state, getRole())) {
+			int score = findMinScore(move, state, alpha, beta);
 			if (score > alpha) {
 				alpha = score;
-				result.move = entry.getKey();
+				if (bestMove != null) {
+					bestMove[0] = move;
+				}
 				if (alpha >= beta) {
-					result.score = beta;
-					return result;
+					alpha = beta;
+					break;
 				}
 			}
 		}
-		result.score = alpha;
-		return result;
+		return alpha;
 	}
 
-	private int findMinScore(List<MachineState> states, int alpha, int beta)
+	private int findMinScore(Move move, MachineState state, int alpha, int beta)
 			throws MoveDefinitionException, TransitionDefinitionException,
 			GoalDefinitionException {
-		for (MachineState state : states) {
-			int score = sm.isTerminal(state) ? sm.getGoal(state, getRole())
-											 : findBestMove(state, alpha, beta).score;
-			beta = Math.min(beta, score);
-			if (beta <= alpha) {
-				return alpha;
+		for (List<Move> joinMove : sm.getLegalJointMoves(state, getRole(), move)) {
+			MachineState nextState = sm.getNextState(state, joinMove);
+			int score = findBestMove(nextState, alpha, beta, null);
+			if (score < beta) {
+				beta = score;
+				if (beta <= alpha) {
+					return alpha;
+				}
 			}
 		}
 		return beta;
