@@ -87,8 +87,10 @@ public class MyMonteGamer extends SampleGamer {
 
 	private void expand(Node node, MachineState state, Role role)
  			throws MoveDefinitionException, TransitionDefinitionException, GoalDefinitionException {
+		List<Move> legalMoves = getStateMachine().getLegalMoves(state, role);
+		node.children = new ArrayList<Node>(legalMoves.size());
  		if (getStateMachine().isTerminal(state)) return;
- 		for (Move move : getStateMachine().getLegalMoves(state, role)) {
+		for (Move move : legalMoves) {
 			node.children.add(new Node(move, node));
 		}
 	}
@@ -118,7 +120,7 @@ public class MyMonteGamer extends SampleGamer {
 		return bestMove;
 	}
 
-	double score(Node node) {
+	static double score(Node node) {
 		return (node.utility / node.visits + Math.sqrt(Math.log(exploreWt * node.parent.visits) / node.visits)) ;
 	}
 
@@ -152,16 +154,15 @@ public class MyMonteGamer extends SampleGamer {
 	void dump(Node node, Role role, int level) {
 		for(int i = 0; i < level; ++i) System.out.printf("  ");
 		System.out.printf("%s %s\n", node.toString(), role);
-
-		for( Node child : node.children) dump(child,  nextRole(role, 1), level+1);
+		if (node.children != null)
+			for( Node child : node.children) dump(child,  nextRole(role, 1), level+1);
 
 	}
 
 	static class Node {
 		public int visits = 0;
 		public float utility = 0;
-		public List<Node> children = new ArrayList<Node>();
-		boolean terminal = false;
+		public List<Node> children;
 
 		public Move move;
 		public Node parent;
@@ -173,8 +174,10 @@ public class MyMonteGamer extends SampleGamer {
 
 		@Override
 		public String toString() {
-			return String.format("Node[id=%d, %s, utility=%g, visits=%d, #child=%d]",
-					hashCode(), move, utility, visits, children.size());
+			double score = visits>0 && parent != null ? score(this) : -1;
+			int numKids = children == null ? -1 : children.size();
+			return String.format("Node[id=%d, %s, utility=%g, score=%g visits=%d, #child=%d]",
+					hashCode(), move, utility, score, visits, numKids);
 		}
 
 		public void dump() {
@@ -183,7 +186,7 @@ public class MyMonteGamer extends SampleGamer {
 		void dump(int level) {
 			for(int i = 0; i < level; ++i) System.out.printf("  ");
 			System.out.println(this.toString());
-			for( Node child : children) child.dump(level+1);
+			for( Node child : children) if (child.children != null) child.dump(level+1);
 		}
 	}
 }
