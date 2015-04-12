@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Random;
 
 import org.ggp.base.player.gamer.statemachine.sample.SampleGamer;
+import org.ggp.base.util.gdl.grammar.GdlTerm;
 import org.ggp.base.util.statemachine.MachineState;
 import org.ggp.base.util.statemachine.Move;
 import org.ggp.base.util.statemachine.Role;
@@ -21,13 +22,18 @@ import org.ggp.base.util.statemachine.exceptions.TransitionDefinitionException;
 public class MyMonteGamer extends SampleGamer {
 
 	// Parameters to adjust
-	static final int gracePeriod = 1000;
+	static final int gracePeriod = 500;
 	static final double exploreWt = 2;
 	static final double discountFactor = 0.95;
-	static final int numProbes = 5;
+//	static final int numProbes = 5;
 
 	Random rand = new Random(System.currentTimeMillis());
+	private Node previousChoice;
 
+	@Override
+	public void stateMachineMetaGame(long timeout) {
+		previousChoice = null;
+	}
 
 	@Override
 	public Move stateMachineSelectMove(long timeout)
@@ -42,19 +48,20 @@ public class MyMonteGamer extends SampleGamer {
 
 	private Move mcts(long timeout)
 			throws MoveDefinitionException, TransitionDefinitionException, GoalDefinitionException {
-		Node root = new Node(null, null);
-		expand(root, getCurrentState(), getRole());
-		root.visits = 1;
+		Node root = initializeRoot();
 		System.out.printf("%d, %d, %d\n", System.currentTimeMillis(), timeout, timeout - System.currentTimeMillis());
 		while (System.currentTimeMillis() + gracePeriod  < timeout) {
 			MachineState[] state = { getCurrentState() };
 			Role[] role = {getRole()};
 			Node node = select(root, state, role);
-			if (node == null)
+			if (node == null) {
 				break;
+			}
 			expand(node, state[0], role[0]);
-			MachineState result = simulate(node, state[0]);
-			backPropagate(result, node, role[0]);
+
+			int[] depth = {-1};
+			MachineState result = simulate(node, state[0], depth);
+			backPropagate(result, depth, node, role[0]);
 		}
 		System.out.println(getCurrentState());
 		dump(root, getRole(), 0);
@@ -70,55 +77,106 @@ public class MyMonteGamer extends SampleGamer {
 				return child;
 			}
 		}
-		if (getStateMachine().isTerminal(state[0]))
+		if (getStateMachine().isTerminal(state[0])) {
+			System.out.println(">>>>>>>>>>>>>>>>>>> Terminal node breakl");
 			return null;
+		}
 
 		double maxScore = -1;
+		Node nextNode = null;
 		for (Node child : node.children) {
 			double newScore = score(child);
 			if (newScore > maxScore) {
-				maxScore = newScore;
-				node = child;
+				MachineState[] tmpState = {state[0]};
+				Role[] tmpRole = {role[0]};
+				applyMove(child.move, tmpState, tmpRole);
+				if (!getStateMachine().isTerminal(tmpState[0])) {
+					maxScore = newScore;
+					nextNode = child;
+				}
 			}
 		}
-		applyMove(node.move, state, role);
-		return select(node, state, role);
+		if (nextNode == null) {
+			return node;
+		}
+		applyMove(nextNode.move, state, role);
+		return select(nextNode, state, role);
 	}
 
 	private void expand(Node node, MachineState state, Role role)
  			throws MoveDefinitionException, TransitionDefinitionException, GoalDefinitionException {
+		try {
+		if (getStateMachine().isTerminal(state)) return;
 		List<Move> legalMoves = getStateMachine().getLegalMoves(state, role);
 		node.children = new ArrayList<Node>(legalMoves.size());
- 		if (getStateMachine().isTerminal(state)) return;
 		for (Move move : legalMoves) {
 			node.children.add(new Node(move, node));
 		}
+		} catch(MoveDefinitionException ex) {
+			System.out.println("aha!");
+		}
 	}
 
-	private MachineState simulate(Node node, MachineState state)
+	private MachineState simulate(Node node, MachineState state, int[] depth)
 			throws TransitionDefinitionException, MoveDefinitionException {
-		return getStateMachine().performDepthCharge(state, null);
+		return getStateMachine().performDepthCharge(state, depth);
 	}
 
-	private void backPropagate(MachineState result, Node node, Role role)
+	private void backPropagate(MachineState result, int[] depth, Node node, Role role)
 			throws GoalDefinitionException {
+		final double accumulatedDiscountFactor = Math.pow(discountFactor, depth[0]);
 		for ( ; node != null ; node = node.parent, role = nextRole(role, -1)) {
 			++node.visits;
-			node.utility += getStateMachine().getGoal(result, role) / 100.0;
+			node.utility += getStateMachine().getGoal(result, role)* discountFactor / 100.0;
 		}
 	}
 
 	private Move selectFinalMove(Node root) {
 		Move bestMove = null;
+		previousChoice = null;
 		double bestUtility = -1;
 		for (Node node : root.children) {
 			if (node.utility > bestUtility) {
 				bestUtility = node.utility;
 				bestMove = node.move;
+				previousChoice = node;
 			}
 		}
 		return bestMove;
 	}
+
+	private Node initializeRoot() throws MoveDefinitionException,
+			TransitionDefinitionException, GoalDefinitionException {
+
+		List<GdlTerm> prevJointMove = getMatch().getMostRecentMoves();
+		int myRoleIx = getStateMachine().getRoleIndices().get(getRole());
+
+		Node node = previousChoice;
+		int roleIx = myRoleIx;
+
+		while(true) {
+			if (node == null) {
+				node = new Node(null, null);
+				expand(node, getCurrentState(), getRole());
+				node.visits = 1;
+				return node;
+			}
+			roleIx = (roleIx+1) % prevJointMove.size();
+			if (roleIx == myRoleIx) {
+				System.out.println("**** Found pre-existing tree!");
+				return node;
+			}
+			Node matchingChild = null;
+			for (Node child : node.children) {
+				if (child.move.getContents().equals(prevJointMove.get(roleIx))) {
+					matchingChild = child;
+					break;
+				}
+			}
+			node = matchingChild;
+		}
+	}
+
 
 	static double score(Node node) {
 		return (node.utility / node.visits + Math.sqrt(Math.log(exploreWt * node.parent.visits) / node.visits)) ;
@@ -155,7 +213,10 @@ public class MyMonteGamer extends SampleGamer {
 		for(int i = 0; i < level; ++i) System.out.printf("  ");
 		System.out.printf("%s %s\n", node.toString(), role);
 		if (node.children != null)
-			for( Node child : node.children) dump(child,  nextRole(role, 1), level+1);
+			for( Node child : node.children) {
+				if (child.visits > 0)
+				dump(child,  nextRole(role, 1), level+1);
+			}
 
 	}
 
@@ -176,8 +237,9 @@ public class MyMonteGamer extends SampleGamer {
 		public String toString() {
 			double score = visits>0 && parent != null ? score(this) : -1;
 			int numKids = children == null ? -1 : children.size();
-			return String.format("Node[id=%d, %s, utility=%g, score=%g visits=%d, #child=%d]",
-					hashCode(), move, utility, score, visits, numKids);
+			double value = (visits > 0) ? utility / visits : -1;
+			return String.format("Node[id=%d, %s, value=%g, score=%g visits=%d, #child=%d]",
+					hashCode(), move, value, score, visits, numKids);
 		}
 
 		public void dump() {
